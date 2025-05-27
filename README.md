@@ -83,30 +83,32 @@ version: '3.8'
 
 services:
   api:
-    build: ./api
-    container_name: api_service
+    image: api-service
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
     depends_on:
       - executor
-    expose:
-      - "8000"
+    environment:
+      - EXECUTOR_URL=http://executor:9000/execute
+    networks:
+      - cloud_llm_network
 
   executor:
-    build: ./executor
-    container_name: executor_service
-    expose:
-      - "9000"
-
-  nginx:
-    image: nginx:alpine
-    container_name: reverse_proxy
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
-      - ./nginx/fullchain.pem:/etc/ssl/certs/fullchain.pem
-      - ./nginx/privkey.pem:/etc/ssl/private/privkey.pem
+    image: executor-service
+    build:
+      context: ./executor
+      dockerfile: Dockerfile
     ports:
-      - "443:443"
-    depends_on:
-      - api
+      - "9000:9000"
+    networks:
+      - cloud_llm_network
+
+networks:
+  cloud_llm_network:
+    driver: bridge
 ```
 
 ---
@@ -114,7 +116,7 @@ services:
 ## Build and Run
 
 ```bash
-docker-compose up --build -d
+docker compose up --build -d
 ```
 
 ---
