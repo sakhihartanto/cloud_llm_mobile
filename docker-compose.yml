@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  api:
+    image: api-service
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      - executor
+    environment:
+      - EXECUTOR_URL=http://executor:9000/execute
+    networks:
+      - cloud_llm_network
+
+  executor:
+    image: executor-service
+    build:
+      context: ./executor
+      dockerfile: Dockerfile
+    ports:
+      - "9000:9000"
+    networks:
+      - cloud_llm_network
+
+networks:
+  cloud_llm_network:
+    driver: bridge

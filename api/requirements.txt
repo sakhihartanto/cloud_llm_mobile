@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+sse-starlette
+openai
+anthropic
+google-cloud-aiplatform
+deepseek-sdk  # or the appropriate PyPI package
+requests       # for downloading images in demo
+pillow         # for image saving
+aiohttp
+pyyaml
+httpx

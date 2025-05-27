@@ -1,0 +1,123 @@
+import os
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse
+from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+import json
+import yaml
+from pathlib import Path
+from PIL import Image, ImageDraw
+import io
+import base64
+import sys
+from contextlib import redirect_stdout, redirect_stderr
+
+app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount the directory containing index.html
+current_dir = Path(__file__).parent
+app.mount("/static", StaticFiles(directory=str(current_dir)), name="static")
+
+# Define the executor URL (can be set via environment variable)
+EXECUTOR_URL = os.getenv("EXECUTOR_URL", "http://localhost:9000/execute")
+
+async def run_code_in_executor(code: str):
+    """Send code to executor for execution and return the result"""
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(EXECUTOR_URL, json={"code": code, "language": "python"})
+        resp.raise_for_status()
+        return resp.json()
+
+def create_mock_image(text):
+    # Create a new image with a white background
+    img = Image.new('RGB', (200, 100), color='white')
+    d = ImageDraw.Draw(img)
+    # Add some text to the image
+    d.text((10,40), text, fill='black')
+    
+    # Convert PIL image to base64 string
+    buffered = io.BytesIO()
+    img.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return f"data:image/png;base64,{img_str}"
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    html_file = current_dir / "index.html"
+    return html_file.read_text()
+
+@app.get("/healthz")
+async def health():
+    return {"status": "ok"}
+
+@app.post("/stream-query")
+async def stream_query(request: Request):
+    data = await request.json()
+    prompt = data.get("prompt", "")
+
+    async def event_generator():
+        yield {"event": "status", "data": json.dumps({"text": "Thinking..."})}
+        await asyncio.sleep(1)
+
+        # Generate code dynamically based on the prompt
+        code_to_run = f"""
+import json
+
+# Create some sample data
+data = {{
+    "analysis": {{
+        "input": "User prompt: {repr(prompt)}",
+        "metrics": {{
+            "words": len({repr(prompt)}.split()),
+            "characters": len({repr(prompt)})
+        }},
+        "results": [
+            {{ "type": "word_count", "value": len({repr(prompt)}.split()) }},
+            {{ "type": "char_count", "value": len({repr(prompt)}) }}
+        ]
+    }}
+}}
+
+# Output as JSON string
+print(json.dumps(data, indent=2))
+"""
+        yield {"event": "code", "data": json.dumps({"code": code_to_run, "language": "python"})}
+        await asyncio.sleep(1)
+
+        # Call executor to run the generated code
+        result_dict = await run_code_in_executor(code_to_run)
+        if "error" in result_dict:
+            yield {"event": "text", "data": json.dumps({"text": f"Error in execution:\n{result_dict['error']}"})}
+        else:
+            # Convert the result to YAML format and send it
+            yaml_output = yaml.dump(result_dict, sort_keys=False, allow_unicode=True)
+            yield {"event": "text", "data": json.dumps({"text": f"Results in YAML format:\n{yaml_output}"})}
+
+        # Generate an image based on some metric from the result
+        if "error" not in result_dict:
+            try:
+                word_count = result_dict["analysis"]["metrics"]["words"]
+                img_data = create_mock_image(f"Word count: {word_count}")
+                yield {"event": "image", "data": json.dumps({"url": img_data})}
+            except KeyError:
+                pass
+
+        yield {"event": "text", "data": json.dumps({"text": "Completed"})}
+
+    return EventSourceResponse(event_generator())
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
